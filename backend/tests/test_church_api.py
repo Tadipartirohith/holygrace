@@ -4,6 +4,7 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "https://faith-stream-27.preview.emergentagent.com").rstrip("/")
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "test-admin-token-12345")
 
 
 @pytest.fixture
@@ -32,12 +33,16 @@ class TestPrayer:
         assert r.status_code == 200, r.text
         d = r.json()
         assert d["status"] == "received"
-        assert d["name"] == "TEST_User"
         assert "id" in d
         assert "_id" not in d
+        # Submitter response is non-sensitive (no name/email/request echoed back).
+        assert "name" not in d
+        assert "email" not in d
+        assert "request" not in d
 
-        # GET list
-        r2 = s.get(f"{BASE_URL}/api/prayers")
+        # GET admin list — requires X-Admin-Token
+        r2 = s.get(f"{BASE_URL}/api/admin/prayers",
+                   headers={"X-Admin-Token": ADMIN_TOKEN})
         assert r2.status_code == 200
         items = r2.json()
         assert isinstance(items, list)
@@ -45,12 +50,20 @@ class TestPrayer:
             assert "_id" not in it
         assert any(p["id"] == d["id"] for p in items)
 
+    def test_admin_prayers_requires_token(self, s):
+        r = s.get(f"{BASE_URL}/api/admin/prayers")
+        assert r.status_code in (401, 503)
+        r2 = s.get(f"{BASE_URL}/api/admin/prayers",
+                   headers={"X-Admin-Token": "wrong-token"})
+        assert r2.status_code in (401, 503)
+
     def test_anonymous_prayer(self, s):
         r = s.post(f"{BASE_URL}/api/prayers", json={
             "name": "ShouldBeHidden", "request": "Anon prayer test", "is_anonymous": True
         })
         assert r.status_code == 200
-        assert r.json()["name"] == "Anonymous"
+        # Submitter no longer sees name field at all (privacy).
+        assert "name" not in r.json()
 
     def test_validation_empty_request(self, s):
         r = s.post(f"{BASE_URL}/api/prayers", json={"name": "X", "request": ""})
@@ -100,8 +113,9 @@ class TestDonations:
         assert r2.status_code == 200
         assert r2.json()["status"] == "upi_initiated"
 
-        # verify persisted via list
-        lst = s.get(f"{BASE_URL}/api/donations").json()
+        # verify persisted via admin list
+        lst = s.get(f"{BASE_URL}/api/admin/donations",
+                    headers={"X-Admin-Token": ADMIN_TOKEN}).json()
         match = [x for x in lst if x.get("order_id") == order_id]
         assert match and match[0]["status"] == "upi_initiated"
 
@@ -123,10 +137,15 @@ class TestDonations:
         assert d["status"] == "failed"
 
     def test_list_donations_no_objectid(self, s):
-        r = s.get(f"{BASE_URL}/api/donations")
+        r = s.get(f"{BASE_URL}/api/admin/donations",
+                  headers={"X-Admin-Token": ADMIN_TOKEN})
         assert r.status_code == 200
         for it in r.json():
             assert "_id" not in it
+
+    def test_admin_donations_requires_token(self, s):
+        r = s.get(f"{BASE_URL}/api/admin/donations")
+        assert r.status_code in (401, 503)
 
     def test_invalid_amount(self, s):
         r = s.post(f"{BASE_URL}/api/donations/create-order", json={
