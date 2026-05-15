@@ -15,9 +15,9 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AppConfig } from "@/src/config/appConfig";
+import { apiUrl } from "@/src/utils/api";
 
 const C = AppConfig.theme;
-const API = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 export default function Prayer() {
   const [name, setName] = useState("");
@@ -38,7 +38,7 @@ export default function Prayer() {
     }
     setSubmitting(true);
     try {
-      const res = await fetch(`${API}/api/prayers`, {
+      const res = await fetch(apiUrl("/api/prayers"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

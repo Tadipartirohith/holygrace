@@ -1,8 +1,9 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Header, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import sys
 import logging
 import hmac
 import hashlib
@@ -16,19 +17,64 @@ from datetime import datetime, timezone
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-# MongoDB connection
-mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ["DB_NAME"]]
+# ─────────────────────────────────────────────────────────────
+# Configure logging FIRST so startup errors are visible
+# ─────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
-# Razorpay & email config (placeholders — main config lives in frontend/src/config/appConfig.ts)
+
+# ─────────────────────────────────────────────────────────────
+# Validate required env vars with clear errors (no silent KeyError)
+# ─────────────────────────────────────────────────────────────
+def require_env(key: str) -> str:
+    value = os.environ.get(key)
+    if not value:
+        logger.error(
+            f"FATAL: Required environment variable '{key}' is not set. "
+            f"Copy backend/.env.example to backend/.env and fill it in."
+        )
+        sys.exit(1)
+    return value
+
+
+MONGO_URL = require_env("MONGO_URL")
+DB_NAME = require_env("DB_NAME")
+
+# Optional config
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "rzp_test_REPLACE_WITH_YOUR_KEY")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "REPLACE_WITH_YOUR_SECRET")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_API_URL = os.environ.get("RESEND_API_URL", "https://api.resend.com/emails")
+RESEND_FROM_EMAIL = os.environ.get(
+    "RESEND_FROM_EMAIL", "Grace Community <onboarding@resend.dev>"
+)
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "pastor@gracecommunity.org")
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")  # required to access admin endpoints
+
+# MongoDB connection
+client = AsyncIOMotorClient(MONGO_URL)
+db = client[DB_NAME]
 
 app = FastAPI(title="Grace Community Church API")
 api_router = APIRouter(prefix="/api")
+
+
+# ─────────────────────────────────────────────────────────────
+# Admin auth dependency — protects sensitive list endpoints
+# ─────────────────────────────────────────────────────────────
+async def require_admin(x_admin_token: Optional[str] = Header(default=None)):
+    if not ADMIN_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin access not configured. Set ADMIN_TOKEN in backend/.env.",
+        )
+    if not x_admin_token or not hmac.compare_digest(x_admin_token, ADMIN_TOKEN):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return True
 
 
 # ─────────────────────────────────────────────────────────────
@@ -42,7 +88,14 @@ class PrayerRequestIn(BaseModel):
     is_anonymous: bool = False
 
 
-class PrayerRequestOut(BaseModel):
+class PrayerRequestPublicOut(BaseModel):
+    """What the submitter sees back — no other people's data."""
+    id: str
+    status: str
+    created_at: str
+
+
+class PrayerRequestAdminOut(BaseModel):
     id: str
     name: str
     email: Optional[str] = None
@@ -50,7 +103,7 @@ class PrayerRequestOut(BaseModel):
     request: str
     is_anonymous: bool
     status: str
-    created_at: datetime
+    created_at: str
 
 
 class DonationOrderIn(BaseModel):
@@ -85,13 +138,6 @@ class UpiConfirmIn(BaseModel):
 # ─────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────
-def doc_to_dict(doc: dict) -> dict:
-    if not doc:
-        return doc
-    doc.pop("_id", None)
-    return doc
-
-
 async def send_prayer_email(prayer: dict) -> None:
     """Send admin notification. No-op if RESEND_API_KEY not set."""
     if not RESEND_API_KEY:
@@ -109,10 +155,10 @@ async def send_prayer_email(prayer: dict) -> None:
         <p style="color:#888;font-size:12px;">Submitted at {prayer.get('created_at')}</p>
         """
         requests.post(
-            "https://api.resend.com/emails",
+            RESEND_API_URL,
             headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
             json={
-                "from": "Grace Community <onboarding@resend.dev>",
+                "from": RESEND_FROM_EMAIL,
                 "to": [ADMIN_EMAIL],
                 "subject": f"Prayer Request — {prayer.get('category')}",
                 "html": html,
@@ -134,8 +180,9 @@ async def root():
 # ─────────────────────────────────────────────────────────────
 # Routes — Prayer Requests
 # ─────────────────────────────────────────────────────────────
-@api_router.post("/prayers", response_model=PrayerRequestOut)
+@api_router.post("/prayers", response_model=PrayerRequestPublicOut)
 async def create_prayer(req: PrayerRequestIn):
+    now = datetime.now(timezone.utc).isoformat()
     prayer = {
         "id": str(uuid.uuid4()),
         "name": "Anonymous" if req.is_anonymous else req.name,
@@ -144,17 +191,23 @@ async def create_prayer(req: PrayerRequestIn):
         "request": req.request,
         "is_anonymous": req.is_anonymous,
         "status": "received",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now,
     }
     await db.prayers.insert_one(prayer.copy())
     await send_prayer_email(prayer)
-    return PrayerRequestOut(**prayer)
+    # Only return non-sensitive confirmation to the submitter.
+    return PrayerRequestPublicOut(id=prayer["id"], status="received", created_at=now)
 
 
-@api_router.get("/prayers", response_model=List[PrayerRequestOut])
-async def list_prayers():
+@api_router.get(
+    "/admin/prayers",
+    response_model=List[PrayerRequestAdminOut],
+    dependencies=[Depends(require_admin)],
+)
+async def list_prayers_admin():
+    """Admin-only: returns all prayer requests. Requires X-Admin-Token header."""
     items = await db.prayers.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
-    return [PrayerRequestOut(**i) for i in items]
+    return [PrayerRequestAdminOut(**i) for i in items]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -166,7 +219,6 @@ async def create_donation_order(req: DonationOrderIn):
     In production, call Razorpay's /v1/orders endpoint with your secret.
     """
     internal_id = str(uuid.uuid4())
-    # Mock razorpay-style order id (real integration would call Razorpay API).
     order_id = f"order_{uuid.uuid4().hex[:14]}"
     record = {
         "id": internal_id,
@@ -229,8 +281,9 @@ async def confirm_upi(req: UpiConfirmIn):
     return {"status": "upi_initiated"}
 
 
-@api_router.get("/donations")
-async def list_donations():
+@api_router.get("/admin/donations", dependencies=[Depends(require_admin)])
+async def list_donations_admin():
+    """Admin-only: returns all donations. Requires X-Admin-Token header."""
     items = await db.donations.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return items
 
@@ -247,12 +300,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 
 @app.on_event("shutdown")

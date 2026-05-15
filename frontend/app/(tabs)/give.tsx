@@ -15,9 +15,9 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AppConfig } from "@/src/config/appConfig";
+import { apiUrl } from "@/src/utils/api";
 
 const C = AppConfig.theme;
-const API = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 type Method = "razorpay" | "upi";
 
@@ -48,7 +48,7 @@ export default function Give() {
   };
 
   const createOrder = async (m: Method) => {
-    const res = await fetch(`${API}/api/donations/create-order`, {
+    const res = await fetch(apiUrl("/api/donations/create-order"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -76,7 +76,7 @@ export default function Give() {
       )}&am=${numericAmount}&cu=INR&tn=${encodeURIComponent(note)}`;
 
       // Confirm initiation in backend
-      fetch(`${API}/api/donations/confirm-upi`, {
+      fetch(apiUrl("/api/donations/confirm-upi"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ order_id: order.order_id, upi_txn_ref: note }),
