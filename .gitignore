@@ -106,3 +106,9 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+
+# Allow .env.example templates (no secrets, safe to commit)
+!*.env.example
+!.env.example
+!**/.env.example
