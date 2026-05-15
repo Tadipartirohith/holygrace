@@ -54,6 +54,7 @@ RESEND_FROM_EMAIL = os.environ.get(
 )
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "pastor@gracecommunity.org")
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")  # required to access admin endpoints
+CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
 
 # MongoDB connection
 client = AsyncIOMotorClient(MONGO_URL)
@@ -296,7 +297,7 @@ app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
