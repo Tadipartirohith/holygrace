@@ -1,0 +1,35 @@
+{
+  "summary": "Grace Community Church mobile app — full backend + frontend testing. All 11 pytest backend tests pass. All 4 tabs render, navigation works, prayer submission persists end-to-end, donation order creation works for both UPI and Razorpay, YouTube iframe embeds correctly. No critical issues found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "give.tsx", "issues": ["Uses deprecated shadow* style props (shadowColor/shadowOpacity/shadowRadius/shadowOffset on giveBtn) — React Native Web warns to use boxShadow. Non-blocking but should be migrated."]}
+    ],
+    "react_native_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_church_api.py", "/app/test_reports/pytest/results.xml"],
+  "action_items": [
+    "(Optional) Migrate deprecated shadow* props in /app/frontend/app/(tabs)/give.tsx giveBtn style to boxShadow for RN Web compatibility (warning only).",
+    "When user provides real Razorpay keys, replace mocked order_id generation in /app/backend/server.py create_donation_order with real Razorpay /v1/orders API call.",
+    "When user provides Resend API key, the no-op email path in send_prayer_email will auto-activate — no code change needed."
+  ],
+  "critical_code_review_comments": [
+    "server.py logger is used inside send_prayer_email but defined AFTER routes (line 255). Currently works because send_prayer_email runs only after RESEND_API_KEY check at runtime, but logger reference is to module-level name resolved late — safe but fragile. Move logger setup above route definitions.",
+    "MongoDB _id is properly excluded in all responses (via doc_to_dict helper + projection {'_id': 0}). Verified in tests.",
+    "Razorpay order creation is MOCKED (generates fake order_id locally) — by design per problem statement; flagged as expected mock.",
+    "Resend email send is no-op when RESEND_API_KEY is empty — by design (MOCKED placeholder behavior).",
+    "Frontend uses EXPO_PUBLIC_BACKEND_URL (correct for Expo public env vars)."
+  ],
+  "updated_files": ["/app/backend/tests/test_church_api.py (new)"],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% (all 4 tabs, navigation, forms, API integration verified)"},
+  "seed_data_creation": "Created test prayer requests (TEST_User, Test Pilgrim, Anonymous) and donation orders (TEST_Donor, TEST_Donor2, TEST_UPI, TEST_RZ) in MongoDB during pytest + UI runs. Minor cleanup recommended but not blocking.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend endpoints: GET /api/, POST /api/prayers, GET /api/prayers, POST /api/donations/create-order, POST /api/donations/confirm-upi, POST /api/donations/verify-razorpay, GET /api/donations. Frontend testIDs: home-church-name, home-church-tagline, home-daily-verse, quick-{watch,give,prayer,services}, live-player, open-youtube-btn, open-channel-btn, preset-{amt}, custom-amount-input, purpose-{name}, donor-{name,email}-input, method-{upi,razorpay}, give-now-btn, anonymous-toggle, prayer-{name,email,request}-input, category-{name}, submit-prayer-btn. Razorpay/Resend are MOCKED by design. Use page.once('dialog', lambda d: d.accept()) when clicking submit/give buttons on web (RN Alert maps to window.alert).",
+  "rca_of_issue": "No bugs found."
+}
